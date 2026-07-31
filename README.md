@@ -1,41 +1,42 @@
-# claude-skills
+# safe-server-cleanup
 
-Personal collection of [Claude Code](https://claude.com/claude-code) skills — reusable, `SKILL.md`-based capabilities that Claude loads on demand for specific tasks.
+An agent skill for reclaiming disk space on a live, multi-tenant Linux host without breaking running services. Works with any AI coding agent that supports the `SKILL.md` format — Claude Code, Cursor, and others.
 
-## Skills
+Written from a real incident, not from theory: a production host at 100% disk usage (125MB free) — Docker containers, cron-driven backups, and stale git worktrees all competing for space, serving multiple unrelated projects. The pitfalls table in [`SKILL.md`](./safe-server-cleanup/SKILL.md) is mistakes actually caught *during* that cleanup, not hypothetical ones.
 
-| Skill | Description |
-|---|---|
-| [`safe-server-cleanup`](./safe-server-cleanup/SKILL.md) | Reclaim disk space on a live, multi-tenant Linux host without breaking running services. Investigates before touching anything, classifies every finding by reversibility, and requires explicit confirmation for anything that isn't provably safe to delete. |
+## Why
 
-Each skill was written from a real incident, not from theory — `safe-server-cleanup` came out of an actual disk-full production host (100% used, 125MB free) with Docker, cron-driven backups, and stale git worktrees all competing for space. The pitfalls table in the skill is a list of mistakes that were caught *during* that cleanup, not hypothetical ones.
+"Cleanup" and "delete" are not the same thing. Almost every byte on a real host is either live data, a live cache, or something that looks abandoned but isn't. This skill exists to tell those apart *before* anything is removed — investigate → classify by reversibility → confirm anything ambiguous → act on the smallest safe unit → verify.
+
+An agent that deletes the wrong volume on a shared host is worse than no agent at all.
+
+## What it covers
+
+- Disk investigation (`df`, `du`, Docker, cron, systemd) without assuming what's safe
+- Classifying every finding into safe/reversible, needs-verification, or never-without-sign-off
+- Verifying a Docker volume is truly orphaned before removing it (running + exited containers, compose files)
+- Catching config-based retention settings that look correct but are silently broken
+- Verifying whether "duplicated" `node_modules`/build caches across project copies are already deduped via hardlinks before recommending a different tool
+- Distinguishing gitignored cruft from tracked, deliberately-committed files before deleting anything
+- A pitfalls table of concrete failure modes (forcing past a process lock, deleting an in-use log file, racing a backup cron job, and more)
 
 ## Installation
 
-**Project-scoped** (this skill only applies inside one repo):
+Via the [Skills CLI](https://skills.sh) (installs to whichever agent you're using):
 
 ```bash
-mkdir -p .claude/skills
-cp -r safe-server-cleanup /path/to/your-project/.claude/skills/
+npx skills add https://github.com/luandro/safe-server-cleanup --skill safe-server-cleanup
 ```
 
-**Personal** (available in every Claude Code session, any project):
+Manually, for Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills
-cp -r safe-server-cleanup ~/.claude/skills/
+git clone https://github.com/luandro/safe-server-cleanup /tmp/ssc && \
+  cp -r /tmp/ssc/safe-server-cleanup ~/.claude/skills/safe-server-cleanup
 ```
 
-Claude Code discovers skills automatically from either location — no registration step. Invoke one explicitly with `/safe-server-cleanup`, or just describe the task ("the disk is full, clean it up") and Claude will load it when the description matches.
-
-## Philosophy
-
-These skills favor **investigate → classify → confirm → act on the smallest safe unit → verify** over "run the obvious command." A skill that deletes the wrong volume on a shared host is worse than no skill at all — every workflow here is built to make the safe path the default path, and to make you stop and ask before anything irreversible.
-
-## Contributing
-
-This is a personal collection, but issues and PRs describing a real incident a skill didn't handle well are welcome.
+For other agents, copy the `safe-server-cleanup/` directory into whatever skills/rules directory your agent reads from — the `SKILL.md` format itself isn't Claude-specific.
 
 ## License
 
-MIT — see individual `SKILL.md` frontmatter for per-skill attribution.
+MIT

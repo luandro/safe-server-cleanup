@@ -2,12 +2,10 @@
 name: safe-server-cleanup
 description: Reclaim disk space on a live, multi-tenant Linux host without breaking running services — investigate before touching anything, classify findings by reversibility, and require explicit confirmation for anything that isn't provably safe to delete.
 version: 1.1.0
-author: hermes
+author: luandro
 license: MIT
-metadata:
-  hermes:
-    tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
-    category: devops
+tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
+category: devops
 ---
 
 # Safe Server Cleanup
