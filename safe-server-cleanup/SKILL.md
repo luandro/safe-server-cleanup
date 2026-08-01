@@ -1,7 +1,7 @@
 ---
 name: safe-server-cleanup
-description: Reclaim disk space on a live, multi-tenant Linux host without breaking running services — investigate before touching anything, classify findings by reversibility, and require explicit confirmation for anything that isn't provably safe to delete.
-version: 1.2.0
+description: Use when a disk is full or nearly full on a shared/production Linux host, or when asked to "clean up the server" / "free up disk space." Investigates before touching anything, classifies every finding by reversibility, and requires explicit confirmation for anything that isn't provably safe to delete.
+version: 1.3.0
 author: luandro
 license: MIT
 tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
@@ -9,6 +9,8 @@ category: devops
 ---
 
 # Safe Server Cleanup
+
+## Overview
 
 Free disk space on a server that is actively running other people's services. The
 premise of this skill is that "cleanup" and "delete" are not the same thing:
@@ -156,7 +158,7 @@ insufficient.
    file handle), `journalctl --vacuum-size=200M` instead of clearing
    `/var/log/journal` by hand.
 
-## Step 5 — Verify after
+## Step 5 — Verification Checklist
 
 ```bash
 df -h                      # confirm space was actually freed on the right filesystem
@@ -164,9 +166,13 @@ docker ps -a                # confirm nothing that should be running got removed
 systemctl status <service>  # spot-check anything adjacent to what you touched
 ```
 
-Report a before/after `df -h` line, not just "cleanup done."
+- [ ] `df -h` shows more available space on the filesystem that was actually full
+- [ ] `docker ps -a` still lists every container that was running before, in the same state
+- [ ] Nothing in the "never without sign-off" bucket was touched
+- [ ] Every "needs verification" deletion was confirmed by the user before it happened, not after
+- [ ] A before/after `df -h` line is reported back — not just "cleanup done"
 
-## Pitfalls
+## Common Pitfalls
 
 | Pitfall | Why it happens | Fix |
 |---|---|---|
