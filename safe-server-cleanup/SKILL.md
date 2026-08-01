@@ -1,7 +1,7 @@
 ---
 name: safe-server-cleanup
 description: Reclaim disk space on a live, multi-tenant Linux host without breaking running services — investigate before touching anything, classify findings by reversibility, and require explicit confirmation for anything that isn't provably safe to delete.
-version: 1.1.0
+version: 1.2.0
 author: luandro
 license: MIT
 tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
@@ -175,6 +175,7 @@ Report a before/after `df -h` line, not just "cleanup done."
 | Removing the running kernel | Confused "old" with "not the one in `uname -r`" | Always check `uname -r` first |
 | Treating "no container running" as "orphaned volume" | Exited-but-not-removed containers still count as references | Check `docker ps -a`, not `docker ps` |
 | Racing a backup/retention cron job | Deleting something mid-backup, or right before a retention script needed it as a source | Check `crontab -l` for jobs touching the same paths first |
-| Forcing a cache-clean past a lock | `--force`-ing past "cache in use, waiting for other process" just makes the wait go away, not the reason for it | If a cache tool refuses/waits on a live process's lock, leave it — that process is actively using the cache, not stale |
+| Forcing a cache-clean past a lock | `--force`-ing past "cache in use, waiting for other process" just makes the wait go away, not the reason for it | Identify the holder first (`ps aux \| grep`). If it's unrelated production infra, leave it. If it's your own session's tooling and clearly idle (not mid-download), forcing is fine *with the user's explicit go-ahead* — get that before overriding a safety mechanism, don't decide alone |
+| Attempting a step that needs root with no passwordless sudo | Trying workarounds (sudoers edits, credential prompts) to push through a permission wall | Don't try to escalate. Hand the exact command back to the user to run themselves — they have the access, you don't need it |
 | Deleting a tracked file because it "looks stale" | An old lockfile/config next to a newer one can still be deliberately committed, not leftover | `git status --porcelain` + `git log -- <path>` before deleting anything outside a gitignored dir |
 | Recommending a new tool to fix "duplication" that's already deduped | Separate `du` calls per directory don't reveal hardlinks; naive summed size looks like real waste even when it isn't | Combined `du --total` or `stat -c nlink` across the copies before concluding the current tool is insufficient |
