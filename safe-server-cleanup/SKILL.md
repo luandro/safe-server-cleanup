@@ -1,7 +1,7 @@
 ---
 name: safe-server-cleanup
 description: Use when a disk is full or nearly full on a shared/production Linux host, or when asked to "clean up the server" / "free up disk space." Investigates before touching anything, classifies every finding by reversibility, and requires explicit confirmation for anything that isn't provably safe to delete.
-version: 1.4.0
+version: 1.5.0
 author: luandro
 license: MIT
 tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
@@ -70,6 +70,27 @@ If the host runs an unattended reclamation job (cron/systemd timer, a
 package-manager pruner, a vendor cleanup script), read what it already covers
 before hand-deleting — otherwise you duplicate it, race it, or delete the
 retention artifacts it depends on.
+
+### Two things to verify before you trust (or extend) an unattended job
+
+**1. It resolves its own tools.** cron runs with a minimal `PATH`
+(`/usr/bin:/bin` on Debian/Ubuntu) — anything under `~/.local/bin`, `~/.nvm`,
+`~/.bun/bin` or `~/.cargo/bin` is invisible, so a pruner step silently no-ops
+instead of failing. Reproduce it with `env -i HOME="$HOME" PATH=/usr/bin:/bin
+bash -c 'command -v uv; command -v pnpm'` and make the script prepend the real
+toolchain directories itself. Also close stdin (`</dev/null`) on any subprocess
+that could read it: under cron, stdin is not a terminal.
+
+**2. Its lock cannot wedge it.** A run killed mid-step can leave its step
+subshell (and the `npm`/`pnpm` process it started) holding the lock file
+descriptor, so every later run refuses to start — and on a disk-filling host
+that is precisely when you need it. `flock` alone is not enough: record the
+owner pid, and if the lock is held by a process that is not a live run of the
+script, kill that process tree and reclaim. The reverse mistake is worse:
+reclaiming a lock that *is* legitimately held, or deleting the pid record before
+contending (which destroys the evidence needed to tell the two apart). Test both
+directions — SIGKILL a run and require the next to succeed; start two runs and
+require the second to refuse without touching the first.
 
 ```bash
 crontab -l | grep -iE 'clean|prune|vacuum|tmp'   # user cron
@@ -213,7 +234,11 @@ systemctl status <service>  # spot-check anything adjacent to what you touched
 | Deleting a tracked file because it "looks stale" | An old lockfile/config next to a newer one can still be deliberately committed, not leftover | `git status --porcelain` + `git log -- <path>` before deleting anything outside a gitignored dir |
 | Recommending a new tool to fix "duplication" that's already deduped | Separate `du` calls per directory don't reveal hardlinks; naive summed size looks like real waste even when it isn't | Combined `du --total` or `stat -c nlink` across the copies before concluding the current tool is insufficient |
 | Trusting a cleanup guard you never watched trigger | A guard can fail *open*: `fuser -s -- "$f"` exits non-zero on its own usage error (`fuser` takes no `--`), so "is it held open?" reads as "not held", and the step deletes exactly the files the guard existed to protect | Prove every destructive guard with two fixtures — one that must be kept (file held open by `sleep 600`, a tree read seconds ago) and one that must go — run the step in apply mode, and check both verdicts |
+| A guard that fires on a healthy system | Byte-comparing a *live* file pages falsely: a cron registry or SQLite DB is rewritten mid-run by its own daemon (observed: 33357 → 32128 bytes), so "protected file shrank" alarms on every run and trains the reader to ignore it | Assert damage, not drift — path still exists, file not truncated to zero, registry still parses and still lists its jobs. Run the check on an unmodified system and require a clean result before trusting it |
+| An unattended job that reports failure on a healthy host | A pruning helper returned its guard's verdict as its own exit status, so a step failed whenever its *last* candidate was correctly kept (a nightly run failed over a 47-day-old cache dir the age gate was right to keep) | "Declined" is success: guards return 0 and only real errors propagate. A job that fails every night is a job nobody reads — require a fresh run to exit 0 with no failed steps before trusting it |
+| Comparing two lists captured in different formats | One side space-joined (`tr '\n' ' '`), the other per-line: every element looks missing, so the check warns constantly (or, inverted, passes while blind) | Normalize both sides to one-item-per-line before `comm`/`diff`, and confirm the negative case (nothing missing → no warning) |
 | Deleting a live download/cache tree as "stale" | Age of a *directory* can't distinguish "being read" from "being written": a process reading files never moves the dir mtime | Gate cache deletion on file `-atime` as well, skip anything held open (`fuser`), and treat `*.incomplete`/`*.part` fragments as per-attempt duplicates — reap only those no process holds and nobody has touched for hours |
 | Writing to disk while it is 100% full | The write fails mid-stream and truncates **the file you were writing** — a cleanup script editing itself on a full disk ends up half-written | Free space through an already-working path first, then edit; after any full-disk incident, `bash -n` and re-read the tail of every file written during it |
+| Editing a cleanup script while a run of it is executing | Bash reads the file by byte offset as it goes, so inserting a line mid-run makes the running instance resume inside a different command — observed as `line 912: safe: command not found` in that run's summary, while the file itself stayed `bash -n`-clean | Make the edit only after the run exits (and after any lock it holds is released); to verify a change you cannot wait on, copy the script and test the copy |
 | Reporting "freed N GB" from the bytes you deleted | A deleted file another process still holds open returns no space until that process exits | Compare `df` before/after (the honest number); when deleted ≫ returned, name the holder (`lsof +L1`) and say the space lands on restart |
 | Deleting a looping process's scratch files to "fix" the disk | The loop refills faster than any cron can drain; each reclaimed shard is re-downloaded whole | Identify the loop (`ps -eo pid,etimes` twice) and stop *it*; treat reclamation as buying minutes, not a fix |
