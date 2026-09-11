@@ -1,7 +1,7 @@
 ---
 name: safe-server-cleanup
 description: Use when a disk is full or nearly full on a shared/production Linux host, or when asked to "clean up the server" / "free up disk space." Investigates before touching anything, classifies every finding by reversibility, and requires explicit confirmation for anything that isn't provably safe to delete.
-version: 1.3.0
+version: 1.4.0
 author: luandro
 license: MIT
 tags: [devops, disk-space, cleanup, docker, sysadmin, safety, node-modules, package-managers]
@@ -63,6 +63,33 @@ incomplete because one file permanently exceeds a size cap). Before trusting
 a `keep`/`retention` setting, count what's actually on disk and compare it to
 the configured number — if there are more than configured, the enforcement
 is broken somewhere, config aside.
+
+### Check for an existing scheduled cleanup before you delete anything
+
+If the host runs an unattended reclamation job (cron/systemd timer, a
+package-manager pruner, a vendor cleanup script), read what it already covers
+before hand-deleting — otherwise you duplicate it, race it, or delete the
+retention artifacts it depends on.
+
+```bash
+crontab -l | grep -iE 'clean|prune|vacuum|tmp'   # user cron
+systemctl list-timers --all | grep -iE 'clean|prune|fstrim'
+# For any job found: who owns the script, which tier/dry-run flags it uses,
+# and where its log/state file is — read the last run before acting.
+```
+
+Spend judgement on what the scheduled job deliberately refuses (volumes,
+kernels, protected paths, anything needing sign-off), and on **escalation**:
+if free space is *falling between runs*, the cause is a live process refilling
+faster than any cron can drain — a crash-looping downloader, a runaway log, a
+build loop. Deleting its scratch files only buys minutes; find and stop the
+loop:
+
+```bash
+ps -eo pid,etimes,rss,args --sort=-rss | head   # RSS/CPU hogs; ETIMES exposes restart loops
+du -x -m -d 1 <cache-root> | sort -n | tail     # which subtree grew (bounded scan)
+lsof +L1 2>/dev/null | head                     # deleted-but-open: space not returned yet
+```
 
 ## Step 2 — Classify every candidate
 
@@ -185,3 +212,8 @@ systemctl status <service>  # spot-check anything adjacent to what you touched
 | Attempting a step that needs root with no passwordless sudo | Trying workarounds (sudoers edits, credential prompts) to push through a permission wall | Don't try to escalate. Hand the exact command back to the user to run themselves — they have the access, you don't need it |
 | Deleting a tracked file because it "looks stale" | An old lockfile/config next to a newer one can still be deliberately committed, not leftover | `git status --porcelain` + `git log -- <path>` before deleting anything outside a gitignored dir |
 | Recommending a new tool to fix "duplication" that's already deduped | Separate `du` calls per directory don't reveal hardlinks; naive summed size looks like real waste even when it isn't | Combined `du --total` or `stat -c nlink` across the copies before concluding the current tool is insufficient |
+| Trusting a cleanup guard you never watched trigger | A guard can fail *open*: `fuser -s -- "$f"` exits non-zero on its own usage error (`fuser` takes no `--`), so "is it held open?" reads as "not held", and the step deletes exactly the files the guard existed to protect | Prove every destructive guard with two fixtures — one that must be kept (file held open by `sleep 600`, a tree read seconds ago) and one that must go — run the step in apply mode, and check both verdicts |
+| Deleting a live download/cache tree as "stale" | Age of a *directory* can't distinguish "being read" from "being written": a process reading files never moves the dir mtime | Gate cache deletion on file `-atime` as well, skip anything held open (`fuser`), and treat `*.incomplete`/`*.part` fragments as per-attempt duplicates — reap only those no process holds and nobody has touched for hours |
+| Writing to disk while it is 100% full | The write fails mid-stream and truncates **the file you were writing** — a cleanup script editing itself on a full disk ends up half-written | Free space through an already-working path first, then edit; after any full-disk incident, `bash -n` and re-read the tail of every file written during it |
+| Reporting "freed N GB" from the bytes you deleted | A deleted file another process still holds open returns no space until that process exits | Compare `df` before/after (the honest number); when deleted ≫ returned, name the holder (`lsof +L1`) and say the space lands on restart |
+| Deleting a looping process's scratch files to "fix" the disk | The loop refills faster than any cron can drain; each reclaimed shard is re-downloaded whole | Identify the loop (`ps -eo pid,etimes` twice) and stop *it*; treat reclamation as buying minutes, not a fix |
